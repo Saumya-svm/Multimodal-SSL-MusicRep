@@ -9,3 +9,7 @@
 
 6. Stream for more number of songs
 7. More fusion methods
+
+
+To run:
+`python run.py --eval 1 --train 0`
