@@ -1,4 +1,4 @@
-## TO DO
+## Self Supervised Representation Learning for Music
 
 [ 1. Same embedding space]: <>
 [ 2. Contrastive learning]: <>
