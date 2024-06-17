@@ -1,6 +1,6 @@
 ## TO DO
 
-[comment]: <> 1. Same embedding space
+[ 1. Same embedding space]: <>
 [comment]: <> 2. Contrastive learning
 [comment]: <> 3. Negative Sampling
 [comment]: <> 4. Audio Features
