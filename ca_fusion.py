@@ -112,18 +112,18 @@ class AudioEncoder(nn.Module):
         return out
 
 class Encoder(nn.Module):
-	def __init__(self, n_emb, n_out):
+	def __init__(self, n_emb, n_out, num_heads, head_dim):
 		super(Encoder, self).__init__()
 		self.audioEnc = AudioEncoder(n_emb)
 
 		self.n_emb = n_emb
 		self.n_out = n_out
-		self.pa1 = preAttention(n_emb)
-		self.pa2 = preAttention(n_emb)
-		self.ca1 = CrossAttention()
-		self.ca2 = CrossAttention()
-		# self.sa1 = SelfAttention(n_emb)
-		# self.sa2 = SelfAttention(n_emb)
+		self.num_heads = num_heads
+		self.head_dim = head_dim
+
+		self.ca1 = CrossAttention(self.num_heads, self.head_dim)
+		self.ca2 = CrossAttention(self.num_heads, self.head_dim)
+
 		self.ffn1 = nn.Linear(n_emb, n_out)
 		self.ffn2 = nn.Linear(n_emb, n_out)
 		self.t = nn.Linear(768,n_emb)
@@ -183,10 +183,9 @@ class Decoder(nn.Module):
 		weight_shape = weight_matrix.shape
 
 	def forward(self, x):
-		# logits = self.classifier(x)
-		# prob = torch.sigmoid(logits)
 		logits = self.classifier(x)
 		logits = F.log_softmax(logits, dim=1)
+		# prob = torch.sigmoid(logits)
 		# prob = F.softmax(logits, dim=1)
 		return logits
 
