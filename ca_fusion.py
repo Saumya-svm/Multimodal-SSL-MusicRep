@@ -25,11 +25,11 @@ class CrossAttention(nn.Module):
 		self.num_heads = num_heads
 		self.head_dim = head_dim
 
-		n_emb = num_heads*head_dim
+		self.n_emb = num_heads*head_dim
 
-		self.key = nn.Linear(n_emb, n_emb)
-		self.query = nn.Linear(n_emb, n_emb)
-		self.value = nn.Linear(n_emb, n_emb)
+		self.key = nn.Linear(self.n_emb, self.n_emb)
+		self.query = nn.Linear(self.n_emb, self.n_emb)
+		self.value = nn.Linear(self.n_emb, self.n_emb)
 
 	def forward(self, x, y):
 		# d_k = q.size(-1)
@@ -53,6 +53,7 @@ class CrossAttention(nn.Module):
 		out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads * d_k)
 		# print(out.shape)
 		# out = 0
+		out = self.out_proj(out)
 		return out
 
 class SelfAttention(nn.Module):
@@ -65,28 +66,34 @@ class SelfAttention(nn.Module):
 		self.num_heads = num_heads
 		self.head_dim = head_dim
 
-		n_emb = num_heads*head_dim
+		self.n_emb = num_heads*head_dim
 
-		self.key = nn.Linear(n_emb, n_emb)
-		self.query = nn.Linear(n_emb, n_emb)
-		self.value = nn.Linear(n_emb, n_emb)
+		self.key = nn.Linear(self.n_emb, self.n_emb)
+		self.query = nn.Linear(self.n_emb, self.n_emb)
+		self.value = nn.Linear(self.n_emb, self.n_emb)
 
-	def forward(self, x):
+		self.out_proj = nn.Linear(self.n_emb, self.n_emb)
+
+	def forward(self, x, mask=None):
 		q = self.query(x)
-		k = self.key(y)
-		v = self.value(y)
+		k = self.key(x)
+		v = self.value(x)
 
 		batch_size = x.shape[0]
 
 		q, k, v = map(lambda t: t.reshape(t.shape[0], -1, self.num_heads, t.shape[-1] // self.num_heads).transpose(1, 2), (q, k, v))
 		d_k = q.size(-1)
 		x = torch.matmul(q, k.transpose(-2,-1)/(d_k**0.5))
+		if mask is not None:
+			x = x.masked_fill(mask == 0, float('-inf'))
+
 		# print("ca",q.shape, v.shape, x.shape)
 		x = F.softmax(x, dim=-1)
 		out = torch.matmul(x,v)
 		out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads * d_k)
 		# print(out.shape)
 		# out = 0
+		out = self.out_proj(out)
 		return out
 
 
