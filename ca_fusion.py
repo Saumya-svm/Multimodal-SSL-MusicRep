@@ -7,7 +7,7 @@ from torchsummary import summary
 from torch.utils.data import Dataset, DataLoader
 from random import shuffle
 import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, LinearLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau, StepLR, LinearLR, CosineAnnealingLR
 from numpy import dot
 from numpy.linalg import norm
 import argparse
@@ -16,55 +16,78 @@ import wandb
 neigh = torch.load('neighbours.pt')
 
 class CrossAttention(nn.Module):
-	def __init__(self):
-		super(CrossAttention, self).__init__()
+	def __init__(
+		self, 
+		num_heads, 
+		head_dim):
 
-	def forward(self, q, k, v):
+		super(CrossAttention, self).__init__()
+		self.num_heads = num_heads
+		self.head_dim = head_dim
+
+		n_emb = num_heads*head_dim
+
+		self.key = nn.Linear(n_emb, n_emb)
+		self.query = nn.Linear(n_emb, n_emb)
+		self.value = nn.Linear(n_emb, n_emb)
+
+	def forward(self, x, y):
 		# d_k = q.size(-1)
 		# x = torch.matmul(q, k.transpose(-2,-1)/(d_k**0.5))
 		# print("ca",q.shape, k.shape, x.shape)
 		# x = F.softmax(x, dim=-1)
 		# out = torch.matmul(x, v)
+
+		q = self.query(x)
+		k = self.key(y)
+		v = self.value(y)
+
+		batch_size = x.shape[0]
+
+		q, k, v = map(lambda t: t.reshape(t.shape[0], -1, self.num_heads, t.shape[-1] // self.num_heads).transpose(1, 2), (q, k, v))
 		d_k = q.size(-1)
 		x = torch.matmul(q, k.transpose(-2,-1)/(d_k**0.5))
 		# print("ca",q.shape, v.shape, x.shape)
-		# x = F.softmax(x, dim=-1)
+		x = F.softmax(x, dim=-1)
 		out = torch.matmul(x,v)
+		out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads * d_k)
 		# print(out.shape)
 		# out = 0
-		return out.squeeze(1)
+		return out
 
 class SelfAttention(nn.Module):
-	def __init__(self, n_emb):
+	def __init__(
+		self, 
+		num_heads, 
+		head_dim):
+
 		super(SelfAttention, self).__init__()
+		self.num_heads = num_heads
+		self.head_dim = head_dim
+
+		n_emb = num_heads*head_dim
+
 		self.key = nn.Linear(n_emb, n_emb)
 		self.query = nn.Linear(n_emb, n_emb)
 		self.value = nn.Linear(n_emb, n_emb)
-
 
 	def forward(self, x):
 		q = self.query(x)
-		k = self.key(x)
-		v = self.value(x)
-		x = torch.matmul(q, k.transpose(-2,-1))
+		k = self.key(y)
+		v = self.value(y)
+
+		batch_size = x.shape[0]
+
+		q, k, v = map(lambda t: t.reshape(t.shape[0], -1, self.num_heads, t.shape[-1] // self.num_heads).transpose(1, 2), (q, k, v))
+		d_k = q.size(-1)
+		x = torch.matmul(q, k.transpose(-2,-1)/(d_k**0.5))
+		# print("ca",q.shape, v.shape, x.shape)
 		x = F.softmax(x, dim=-1)
-		out = torch.matmul(x, v)
-		# print('hello')
+		out = torch.matmul(x,v)
+		out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.num_heads * d_k)
+		# print(out.shape)
+		# out = 0
 		return out
-
-
-class preAttention(nn.Module):
-	def __init__(self, n_emb):
-		super(preAttention, self).__init__()
-		self.key = nn.Linear(n_emb, n_emb)
-		self.query = nn.Linear(n_emb, n_emb)
-		self.value = nn.Linear(n_emb, n_emb)
-
-	def forward(self, x):
-		query = self.query(x)
-		key = self.key(x)
-		value = self.value(x)
-		return query, key, value
 
 
 class AudioEncoder(nn.Module):
@@ -115,15 +138,17 @@ class Encoder(nn.Module):
 			textQuery, textKey, textValue = textQuery.reshape(bs, 1, -1), textKey.reshape(bs, 1, -1), textValue.reshape(bs, 1, -1)
 			audioQuery, audioKey, audioValue = audioQuery.reshape(bs, 1, -1), audioKey.reshape(bs, 1, -1), audioValue.reshape(bs, 1, -1)
 
-			temp = self.ca1(textQuery, audioKey, textValue)
+			temp = self.ca1(textQuery, audioKey, textValue) # original implementation
+			temp = self.ca1(textQuery, audioKey, audioValue)
 			# print(textValue.reshape(bs,-1).shape, temp.shape)
-			textValue = self.norm(textValue.reshape(bs,-1) + temp)
+			temp = self.norm(textValue.reshape(bs,-1) + temp)
 			# # textValue = textValue + self.sa1(textValue)
 			# text = self.norm(text+self.relu(self.ffn1(textValue)))
-			text = self.relu(self.ffn1(textValue))
+			text = self.relu(self.ffn1(temp))
 
 			# audioValue = self.norm(audioValue + self.ca2(audioQuery, textKey, audioValue))
-			audioValue =  self.norm(self.ca2(audioQuery, textKey, audioValue))
+			audioValue =  self.norm(self.ca2(audioQuery, textKey, audioValue)) # original implementation
+			audioValue =  self.norm(self.ca2(audioQuery, textKey, textValue))
 			# # audioValue = audioValue + self.sa2(audioValue)
 			# audio = self.relu(self.ffn2(self.norm(audioValue+audio)))
 			audio = self.norm(self.relu(self.ffn2(audioValue)))
@@ -327,7 +352,6 @@ def train(model, loader, test_loader):
 	l = {19: 0.0002, 30: 0.00007 ,45: 0.00002}
 	opt = optim.Adam(model.parameters(), lr=args.learning_rate)
 	sched = ReduceLROnPlateau(opt, mode='min')
-	from torch.optim.lr_scheduler import CosineAnnealingLR
 
 	sched = CosineAnnealingLR(opt,
                               T_max = 100, # Maximum number of iterations.
@@ -490,44 +514,44 @@ def main():
 	criterion = SkipGram_NegSample_Loss()
 	for i, (id,inp1, inp2, y, neg) in enumerate(train_loader):
 		print(inp1.shape, y[0].shape, y[1].shape)
-		# input_emb = model.enc(inp1, inp2)
-		# neg_emb = model.forward_context(neg.float())
-		# # print(torch.argmax(neg,axis=-1).shape)
-		# # ind = torch.argmax(y, dim=-1)
-		# # print('Hello', len(neg))
-		# if True:
-		# 	target_emb = model.enc(y[0], y[1])
-		# 	# print(neg[1][1].shape)
-		# 	# neg_emb = torch.rand(64, 4, 128)
-		# 	# l = []
-		# 	# neg_emb = model.enc(neg[0][0], neg[0][1])
-		# 	# temp = neg_emb.unsqueeze(1)
-		# 	# for i in range(1,4):
-		# 	# 	neg_emb = model.enc(neg[i][0], neg[i][1])
-		# 	# 	temp = torch.concat([temp, neg_emb.unsqueeze(1)], axis=1)
+		input_emb = model.enc(inp1, inp2)
+		neg_emb = model.forward_context(neg.float())
+		# print(torch.argmax(neg,axis=-1).shape)
+		# ind = torch.argmax(y, dim=-1)
+		# print('Hello', len(neg))
+		if True:
+			target_emb = model.enc(y[0], y[1])
+			# print(neg[1][1].shape)
+			# neg_emb = torch.rand(64, 4, 128)
+			# l = []
+			# neg_emb = model.enc(neg[0][0], neg[0][1])
+			# temp = neg_emb.unsqueeze(1)
+			# for i in range(1,4):
+			# 	neg_emb = model.enc(neg[i][0], neg[i][1])
+			# 	temp = torch.concat([temp, neg_emb.unsqueeze(1)], axis=1)
 
-		# else:
-		# 	target_emb = model.forward_context(y)
-		# loss = criterion(input_emb, target_emb, neg_emb)
-		# # print(loss.item())
-		# audio = 0.5*model.enc.audioEnc(inp2)
-		# text = model.enc.relu(model.enc.t(inp1))
+		else:
+			target_emb = model.forward_context(y)
+		loss = criterion(input_emb, target_emb, neg_emb)
+		# print(loss.item())
+		audio = 0.5*model.enc.audioEnc(inp2)
+		text = model.enc.relu(model.enc.t(inp1))
 
-		# textQuery, textKey, textValue = model.enc.pa1(text)
-		# audioQuery, audioKey, audioValue = model.enc.pa2(audio)
+		textQuery, textKey, textValue = model.enc.pa1(text)
+		audioQuery, audioKey, audioValue = model.enc.pa2(audio)
 
-		# textQuery, textKey, textValue = textQuery.reshape(64, 1, -1), textKey.reshape(64, 1, -1), textValue.reshape(64, 1, -1)
-		# audioQuery, audioKey, audioValue = audioQuery.reshape(64, 1, -1), audioKey.reshape(64, 1, -1), audioValue.reshape(64, 1, -1)
+		textQuery, textKey, textValue = textQuery.reshape(64, 1, -1), textKey.reshape(64, 1, -1), textValue.reshape(64, 1, -1)
+		audioQuery, audioKey, audioValue = audioQuery.reshape(64, 1, -1), audioKey.reshape(64, 1, -1), audioValue.reshape(64, 1, -1)
 
-		# temp = model.enc.ca1(textQuery, audioKey, textValue)
-		# print("cross ", temp.shape, textValue.shape)
-		# temp = model.enc.ca2(audioQuery, textKey, audioValue)
-		# print("cross ", temp.shape, textValue.shape)
+		temp = model.enc.ca1(textQuery, audioKey, textValue)
+		print("cross ", temp.shape, textValue.shape)
+		temp = model.enc.ca2(audioQuery, textKey, audioValue)
+		print("cross ", temp.shape, textValue.shape)
 
-		# print(textQuery.shape, audioKey.T.shape)
-		# textValue = model.enc.norm(textValue + model.enc.ca1(textQuery, audioKey, textValue))
+		print(textQuery.shape, audioKey.T.shape)
+		textValue = model.enc.norm(textValue + model.enc.ca1(textQuery, audioKey, textValue))
 		# return
-		break
+		# break
 
 	# return
 
@@ -542,13 +566,13 @@ def main():
 	print(args.run_name)
 	# return
 
-	if args.train:
-		if args.log:
-			wandb.init(project='recsys', config=config, name=args.run_name)
-			model.logging = wandb
-		train(model, train_loader, test_loader)
-		if model.logging:
-			model.logging.finish()
+	# if args.train: 
+		# if args.log:
+		# 	wandb.init(project='recsys', config=config, name=args.run_name)
+		# 	model.logging = wandb
+		# train(model, train_loader, test_loader)
+		# if model.logging:
+		# 	model.logging.finish()
 
 	# eval(model, test_loader)
 
@@ -579,7 +603,8 @@ def main():
 	# 	break
 
 	if args.eval:
-		d = torch.load('ca_fusion'+'_'+args.version+'best.pt')
+		# d = torch.load('ca_fusion'+'_'+args.version+'best.pt')
+		d = torch.load('model/bestbestbest.pt')
 		model.load_state_dict(d['state_dict'])
 		print(eval(model, train_loader, True))
 		print(eval(model, train_loader, False))
@@ -602,7 +627,7 @@ def main():
 		# # print(eval(model, test_loader, True))
 		print(top_val, top_idx)
 		k = list(neigh[i])+[223,828,3477, 3324, 8476, 4867]
-		
+
 		# # k = [3588, 4081, 4375, 4753, 4867, 5778, 5819, 6036, 7656, 8237, 8661,9129, 9397]
 		# l = [i for i in range(len(k))]
 		s = 0
