@@ -325,16 +325,16 @@ def eval(model, loader,isLoss=False):
 			# print(c)
 
 			temp +=  c
-			# for j in range(args.neg_samples):
-			# 	b = neg_emb[i][j].detach().numpy()
-			# 	t  = ((1-(abs(1+cos_sim(a, b))/2)))/4
-			# 	# print(t)
-			# 	temp += t
-			# # print(temp,s)
+			for j in range(args.neg_samples):
+				b = neg_emb[i][j].detach().numpy()
+				t  = ((1-(abs(1+cos_sim(a, b))/2)))/4
+				# print(t)
+				temp += t
+			# print(temp,s)
 
-			# temp = temp/2
+			temp = temp/2
 			s += temp
-			# print(s)
+			print(s)
 
 	if isLoss:
 		return l/len(loader)
@@ -477,6 +477,8 @@ def main():
 
 	text = torch.load('lyrics_embeddings.pt')
 	audio = torch.tensor(np.load('norm_audio.npy'), dtype=torch.float32)
+
+	# alternate feature load
 	# text = torch.load('text_encodings.pt')
 	# audio = torch.load('audio_encodings.pt')
 
@@ -504,6 +506,10 @@ def main():
 	unique_songs = np.unique(X).shape[0] + 1
 	print(unique_songs)
 
+	print(audio.shape, text.shape)
+
+
+	# preparing data for training and evaluation
 	train_data = Embedding(trainX, trainY, audio, text, unique_songs)
 	train_loader = DataLoader(train_data, shuffle=True, batch_size=64)
 
@@ -516,52 +522,6 @@ def main():
 	dec = Decoder(128, unique_songs)
 	model = Model(n_emb, n_out, unique_songs)
 	model.apply(weights_init)
-
-	criterion = SkipGram_NegSample_Loss()
-	for i, (id,inp1, inp2, y, neg) in enumerate(train_loader):
-		print(inp1.shape, y[0].shape, y[1].shape)
-		input_emb = model.enc(inp1, inp2)
-		neg_emb = model.forward_context(neg.float())
-		# print(torch.argmax(neg,axis=-1).shape)
-		# ind = torch.argmax(y, dim=-1)
-		# print('Hello', len(neg))
-		if True:
-			target_emb = model.enc(y[0], y[1])
-			# print(neg[1][1].shape)
-			# neg_emb = torch.rand(64, 4, 128)
-			# l = []
-			# neg_emb = model.enc(neg[0][0], neg[0][1])
-			# temp = neg_emb.unsqueeze(1)
-			# for i in range(1,4):
-			# 	neg_emb = model.enc(neg[i][0], neg[i][1])
-			# 	temp = torch.concat([temp, neg_emb.unsqueeze(1)], axis=1)
-
-		else:
-			target_emb = model.forward_context(y)
-		loss = criterion(input_emb, target_emb, neg_emb)
-		# print(loss.item())
-		audio = 0.5*model.enc.audioEnc(inp2)
-		text = model.enc.relu(model.enc.t(inp1))
-
-		textQuery, textKey, textValue = model.enc.pa1(text)
-		audioQuery, audioKey, audioValue = model.enc.pa2(audio)
-
-		textQuery, textKey, textValue = textQuery.reshape(64, 1, -1), textKey.reshape(64, 1, -1), textValue.reshape(64, 1, -1)
-		audioQuery, audioKey, audioValue = audioQuery.reshape(64, 1, -1), audioKey.reshape(64, 1, -1), audioValue.reshape(64, 1, -1)
-
-		temp = model.enc.ca1(textQuery, audioKey, textValue)
-		print("cross ", temp.shape, textValue.shape)
-		temp = model.enc.ca2(audioQuery, textKey, audioValue)
-		print("cross ", temp.shape, textValue.shape)
-
-		print(textQuery.shape, audioKey.T.shape)
-		textValue = model.enc.norm(textValue + model.enc.ca1(textQuery, audioKey, textValue))
-		# return
-		# break
-
-	# return
-
-	# decoded = dec(encoded)
 	
 
 	config = prepare_config()
@@ -569,49 +529,30 @@ def main():
 		args.run_name = ''
 		for k, v in config.items():
 			args.run_name += k+'_'+str(v)+'_'
+
 	print(args.run_name)
 	# return
 
-	# if args.train: 
-		# if args.log:
-		# 	wandb.init(project='recsys', config=config, name=args.run_name)
-		# 	model.logging = wandb
-		# train(model, train_loader, test_loader)
-		# if model.logging:
-		# 	model.logging.finish()
+	if args.train: 
+		if args.log:
+			wandb.init(project='recsys', config=config, name=args.run_name)
+			model.logging = wandb
+		train(model, train_loader, test_loader)
+		if model.logging:
+			model.logging.finish()
 
-	# eval(model, test_loader)
+	# function to call evaluation
+	eval(model, test_loader)
 
 
-	# d = torch.load('ca_fusion'+'_'+args.version+'.pt')
-	# model.load_state_dict(d['state_dict'])
-	# for i, (id,inp1, inp2, y, neg) in enumerate(train_loader):
-	# 	input_emb = model.enc(inp1, inp2)
-	# 	# print(y.shape)
-	# 	target_emb = model.forward_context(y.float())
-	# 	# print(target_emb.shape, neg.shape)
-	# 	neg_emb = model.forward_context(neg.float())
-	# 	# print(neg_emb.shape)
-	# 	total = 0
-	# 	s = 0
-	# 	for i in range(id.shape[0]):
-	# 		total += 1
-	# 		temp = 0
-	# 		a = input_emb[i].detach().numpy()
-	# 		b = target_emb[i].detach().numpy()
-	# 		c = cos_sim(a,b)**2
-	# 		temp +=  c
-	# 		for j in range(args.neg_samples):
-	# 			temp += (1-cos_sim(input_emb[i].detach().numpy(), neg_emb[i][j].detach().numpy()))**2
-	# 		temp = temp/2
-	# 		s += temp
-	# 	print(s/total, total)
-	# 	break
+	if args.rel_eval:
+		# neighbourhood evaluation
 
-	if args.eval:
 		# d = torch.load('ca_fusion'+'_'+args.version+'best.pt')
-		d = torch.load('model/bestbestbest.pt')
+		d = torch.load('model/best.pt')
 		model.load_state_dict(d['state_dict'])
+
+
 		print(eval(model, train_loader, True))
 		print(eval(model, train_loader, False))
 		print(eval(model, test_loader, True))
@@ -619,9 +560,6 @@ def main():
 		tensor = model.enc(text, audio)
 		tensor_normalized = tensor / torch.norm(tensor, dim=1, keepdim=True)
 
-		# print(eval(model, train_loader, True))
-		# print(eval(model, train_loader, False))
-		# print(eval(model, test_loader, True))
 		# # Compute cosine similarity using matrix multiplication
 		cos_sim_matrix = torch.matmul(tensor_normalized, tensor_normalized.t())
 
@@ -676,6 +614,7 @@ if __name__ == "__main__":
 	parser.add_argument('--epochs', type=int, default=10)
 	parser.add_argument('--version', type=str, default='wa')
 	parser.add_argument('--eval', type=int, default=1)
+	parser.add_argument('--rel_eval', type=int, default=1, help='computes the similarity score with the neighbours or random entities in the song library')
 	parser.add_argument('--include_attention', type=int, default=0)
 	parser.add_argument('--n_emb', type=int, default=64)
 	parser.add_argument('--n_out', type=int, default=64)
